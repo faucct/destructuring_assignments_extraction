@@ -148,8 +148,8 @@ object DestructuringAssignmentsExtractor {
       varDeclarationsFromArrayVariables.clear()
     }
 
-    def visitAssignment(node: Node, statementConstructor: StatementConstructor, target: AstNode, initializer: AstNode) {
-      target match {
+    def visitAssignment(node: Node, statementConstructor: StatementConstructor, left: AstNode, right: AstNode) {
+      left match {
         case targetName: Name =>
           def addToIndexed(indexedDeclarationTargets: IndexedDeclarationTargets, indices: List[Int]): Boolean = {
             var indexed = indexedDeclarationTargets
@@ -187,7 +187,7 @@ object DestructuringAssignmentsExtractor {
             }
           }
 
-          if (visitInitializer(List.empty, initializer))
+          if (visitInitializer(List.empty, right))
             blockNode.removeChild(node)
         case _ => finalizeDeclarations(node)
       }
