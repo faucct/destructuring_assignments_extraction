@@ -6,7 +6,7 @@ https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Dest
 
 Before:
 
-```js
+```javascript
 function ping(arr) {
   var a = arr[0];
   var b = arr[1];
@@ -14,7 +14,7 @@ function ping(arr) {
 ```
 
 After:
-```ecmascript 6
+```javascript
 function ping(arr) {
   var [a, b] = arr;
 }
@@ -22,4 +22,6 @@ function ping(arr) {
 
 ## Running
 
+```
 sbt run src/test/resources/ping.js
+```
