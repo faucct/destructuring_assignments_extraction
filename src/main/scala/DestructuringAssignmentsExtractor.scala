@@ -49,7 +49,7 @@ object DestructuringAssignmentsExtractor {
       indexedDeclarationTargets(index)
     }
 
-    def finalizeDeclarations(afterNode: Node) {
+    def buildVariableDeclarations() = {
       def nameNode(identifier: String) = {
         val name = new Name
         name.setIdentifier(identifier)
@@ -102,11 +102,15 @@ object DestructuringAssignmentsExtractor {
         variableDeclarations
       }
 
-      for (declarationsFromIndices <- varDeclarationsFromArrayVariables) {
-        arrayDeclarationNodes(declarationsFromIndices._2, declarationsFromIndices._1)
-          .foreach(node.addChildBefore(_, afterNode))
-      }
+      val list = varDeclarationsFromArrayVariables.flatMap({ case (identifier, declarationsFromIndices) =>
+        arrayDeclarationNodes(declarationsFromIndices, identifier)
+      }).toList
       varDeclarationsFromArrayVariables.clear()
+      list
+    }
+
+    def finalizeDeclarations(afterNode: Node) {
+      buildVariableDeclarations().foreach(node.addChildBefore(_, afterNode))
     }
 
     node.forEach({
@@ -130,20 +134,20 @@ object DestructuringAssignmentsExtractor {
                       declarationTargets.names.append(targetName.getIdentifier)
                       return true
                     }
-                  case _ =>
+                  case _ => finalizeDeclarations(variableDeclaration)
                 }
                 false
               }
 
               if (visitInitializer(List.empty, variableInitializer.getInitializer))
                 node.removeChild(variableDeclaration)
-            case _ =>
+            case _ => finalizeDeclarations(variableDeclaration)
           }
         } else {
           finalizeDeclarations(variableDeclaration)
         }
-      case _ =>
+      case child => finalizeDeclarations(child)
     })
-    finalizeDeclarations(node.getLastChild)
+    buildVariableDeclarations().foreach(node.addChildToBack)
   }
 }

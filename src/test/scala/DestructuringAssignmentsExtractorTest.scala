@@ -11,6 +11,16 @@ class DestructuringAssignmentsExtractorTest extends org.scalatest.FunSuite {
     assertResult("function ping(arr) {\n  var [a, b] = arr;\n}\n")(script.toSource(0))
   }
 
+  test("variable declarations between a function call") {
+    val script = parser().parse(
+      "function ping(arr) {\n  var a = arr[0];\n  foo();\n  var b = arr[1];\n}\n",
+      null,
+      0
+    )
+    DestructuringAssignmentsExtractor(script)
+    assertResult("function ping(arr) {\n  var [a] = arr;\n  foo();\n  var [, b] = arr;\n}\n")(script.toSource(0))
+  }
+
   private def parser(): Parser = {
     import org.mozilla.javascript.CompilerEnvirons
 
