@@ -8,7 +8,7 @@ import scala.util.Try
 object DestructuringAssignmentsExtractor {
 
   private object IntElementGet {
-    def unapply(node: Node): Option[(Node, Int)] =
+    def unapply(node: Node): Option[(AstNode, Int)] =
       node match {
         case elementGet: ElementGet =>
           elementGet.getElement match {
@@ -33,6 +33,58 @@ object DestructuringAssignmentsExtractor {
     })
   }
 
+  private def nameNode(identifier: String) = {
+    val name = new Name
+    name.setIdentifier(identifier)
+    name
+  }
+
+  private def arrayDeclarationNodes(declarationsFromIndices: IndexedDeclarationTargets, initializer: AstNode): ArrayBuffer[VariableDeclaration] = {
+    def arrayLiteralWithOtherDeclarations(
+      declarationsFromIndices: IndexedDeclarationTargets
+    ): (ArrayLiteral, ArrayBuffer[VariableDeclaration]) = {
+      val arrayLiteral = new ArrayLiteral
+      val variableDeclarationNodes = new mutable.ArrayBuffer[VariableDeclaration]()
+      for (declarationsFromIndex <- declarationsFromIndices) {
+        if (declarationsFromIndex == null)
+          arrayLiteral.addElement(new EmptyExpression())
+        else {
+          if (declarationsFromIndex.names.isEmpty) {
+            val (element, otherDeclarations) = arrayLiteralWithOtherDeclarations(declarationsFromIndex.indexed)
+            arrayLiteral.addElement(element)
+            variableDeclarationNodes ++= otherDeclarations
+          } else {
+            arrayLiteral.addElement(nameNode(declarationsFromIndex.names(0)))
+            for (alias <- declarationsFromIndex.names.tail) {
+              variableDeclarationNodes
+                .append(variableDeclarationNode(nameNode(alias), nameNode(declarationsFromIndex.names(0))))
+            }
+            if (declarationsFromIndex.indexed.nonEmpty)
+              variableDeclarationNodes.appendAll(arrayDeclarationNodes(
+                declarationsFromIndex.indexed,
+                nameNode(declarationsFromIndex.names(0)),
+              ))
+          }
+        }
+      }
+      (arrayLiteral, variableDeclarationNodes)
+    }
+
+    def variableDeclarationNode(target: AstNode, initializer: AstNode) = {
+      val variableDeclaration = new VariableDeclaration()
+      val variableInitializer = new VariableInitializer()
+      variableInitializer.setInitializer(initializer)
+      variableInitializer.setTarget(target)
+      variableDeclaration.addVariable(variableInitializer)
+      variableDeclaration.setIsStatement(true)
+      variableDeclaration
+    }
+
+    val (target, variableDeclarations) = arrayLiteralWithOtherDeclarations(declarationsFromIndices)
+    variableDeclarations.prepend(variableDeclarationNode(target, initializer))
+    variableDeclarations
+  }
+
   type IndexedDeclarationTargets = mutable.ArrayBuffer[DeclarationTargets]
 
   case class DeclarationTargets(names: mutable.ArrayBuffer[String], indexed: IndexedDeclarationTargets)
@@ -50,67 +102,14 @@ object DestructuringAssignmentsExtractor {
     }
 
     def buildVariableDeclarations() = {
-      def nameNode(identifier: String) = {
-        val name = new Name
-        name.setIdentifier(identifier)
-        name
-      }
-
-      def arrayLiteralWithOtherDeclarations(
-        declarationsFromIndices: IndexedDeclarationTargets
-      ): (ArrayLiteral, ArrayBuffer[VariableDeclaration]) = {
-        val arrayLiteral = new ArrayLiteral
-        val variableDeclarationNodes = new mutable.ArrayBuffer[VariableDeclaration]()
-        for (declarationsFromIndex <- declarationsFromIndices) {
-          if (declarationsFromIndex == null)
-            arrayLiteral.addElement(new EmptyExpression())
-          else {
-            if (declarationsFromIndex.names.isEmpty) {
-              val (element, otherDeclarations) = arrayLiteralWithOtherDeclarations(declarationsFromIndex.indexed)
-              arrayLiteral.addElement(element)
-              variableDeclarationNodes ++= otherDeclarations
-            } else {
-              arrayLiteral.addElement(nameNode(declarationsFromIndex.names(0)))
-              for (alias <- declarationsFromIndex.names.tail) {
-                variableDeclarationNodes
-                  .append(variableDeclarationNode(nameNode(alias), nameNode(declarationsFromIndex.names(0))))
-              }
-              if (declarationsFromIndex.indexed.nonEmpty)
-                variableDeclarationNodes.appendAll(arrayDeclarationNodes(
-                  declarationsFromIndex.indexed,
-                  declarationsFromIndex.names(0),
-                ))
-            }
-          }
-        }
-        (arrayLiteral, variableDeclarationNodes)
-      }
-
-      def variableDeclarationNode(target: AstNode, initializer: AstNode) = {
-        val variableDeclaration = new VariableDeclaration()
-        val variableInitializer = new VariableInitializer()
-        variableInitializer.setInitializer(initializer)
-        variableInitializer.setTarget(target)
-        variableDeclaration.addVariable(variableInitializer)
-        variableDeclaration.setIsStatement(true)
-        variableDeclaration
-      }
-
-      def arrayDeclarationNodes(declarationsFromIndices: IndexedDeclarationTargets, identifier: String) = {
-        val (target, variableDeclarations) = arrayLiteralWithOtherDeclarations(declarationsFromIndices)
-        variableDeclarations.prepend(variableDeclarationNode(target, nameNode(identifier)))
-        variableDeclarations
-      }
-
-      val list = varDeclarationsFromArrayVariables.flatMap({ case (identifier, declarationsFromIndices) =>
-        arrayDeclarationNodes(declarationsFromIndices, identifier)
+      varDeclarationsFromArrayVariables.flatMap({ case (identifier, declarationsFromIndices) =>
+        arrayDeclarationNodes(declarationsFromIndices, nameNode(identifier))
       }).toList
-      varDeclarationsFromArrayVariables.clear()
-      list
     }
 
     def finalizeDeclarations(afterNode: Node) {
       buildVariableDeclarations().foreach(node.addChildBefore(_, afterNode))
+      varDeclarationsFromArrayVariables.clear()
     }
 
     node.forEach({
@@ -119,24 +118,38 @@ object DestructuringAssignmentsExtractor {
           val variableInitializer = variableDeclaration.getVariables.get(0)
           variableInitializer.getTarget match {
             case targetName: Name =>
-              def visitInitializer(indices: List[Int], initializer: Node): Boolean = {
-                initializer match {
-                  case IntElementGet(target, index) => return visitInitializer(index :: indices, target)
-                  case name: Name =>
-                    var indexedDeclarationTargets = varDeclarationsFromArrayVariables
-                      .getOrElseUpdate(name.getIdentifier, new mutable.ArrayBuffer())
-                    var declarationTargets: DeclarationTargets = null
-                    for (index <- indices) {
-                      declarationTargets = indexDeclarationTargets(indexedDeclarationTargets, index)
-                      indexedDeclarationTargets = declarationTargets.indexed
-                    }
-                    if (declarationTargets != null) {
-                      declarationTargets.names.append(targetName.getIdentifier)
-                      return true
-                    }
-                  case _ => finalizeDeclarations(variableDeclaration)
+              def addToIndexed(indexedDeclarationTargets: IndexedDeclarationTargets, indices: List[Int]): Boolean = {
+                var indexed = indexedDeclarationTargets
+                var declarationTargets: DeclarationTargets = null
+                for (index <- indices) {
+                  declarationTargets = indexDeclarationTargets(indexed, index)
+                  indexed = declarationTargets.indexed
                 }
-                false
+                if (declarationTargets == null)
+                  return false
+                declarationTargets.names.append(targetName.getIdentifier)
+                true
+              }
+
+              def visitInitializer(indices: List[Int], initializer: AstNode): Boolean = {
+                initializer match {
+                  case IntElementGet(target, index) => visitInitializer(index :: indices, target)
+                  case name: Name =>
+                    addToIndexed(
+                      varDeclarationsFromArrayVariables
+                        .getOrElseUpdate(name.getIdentifier, new mutable.ArrayBuffer()),
+                      indices,
+                    )
+                  case _ =>
+                    finalizeDeclarations(variableDeclaration)
+                    val indexedDeclarationTargets = new IndexedDeclarationTargets
+                    if (addToIndexed(indexedDeclarationTargets, indices)) {
+                      arrayDeclarationNodes(indexedDeclarationTargets, initializer)
+                        .foreach(node.addChildBefore(_, variableDeclaration))
+                      true
+                    } else
+                      false
+                }
               }
 
               if (visitInitializer(List.empty, variableInitializer.getInitializer))
@@ -149,5 +162,6 @@ object DestructuringAssignmentsExtractor {
       case child => finalizeDeclarations(child)
     })
     buildVariableDeclarations().foreach(node.addChildToBack)
+    varDeclarationsFromArrayVariables.clear()
   }
 }
