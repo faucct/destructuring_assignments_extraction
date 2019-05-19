@@ -6,6 +6,7 @@ import scala.collection.mutable.ArrayBuffer
 import scala.util.Try
 
 object DestructuringAssignmentsExtractor {
+
   private object IntElementGet {
     def unapply(node: Node): Option[(Node, Int)] =
       node match {
@@ -25,7 +26,11 @@ object DestructuringAssignmentsExtractor {
   }
 
   def apply(astRoot: AstRoot): Unit = {
-    visitExtractable(astRoot)
+    astRoot.visit(node => {
+      if (node.isInstanceOf[AstRoot] || node.isInstanceOf[Block])
+        visitExtractable(node)
+      true
+    })
   }
 
   type IndexedDeclarationTargets = mutable.ArrayBuffer[DeclarationTargets]
@@ -125,7 +130,7 @@ object DestructuringAssignmentsExtractor {
                       declarationTargets.names.append(targetName.getIdentifier)
                       return true
                     }
-                  case _ => visit(initializer)
+                  case _ =>
                 }
                 false
               }
@@ -137,13 +142,8 @@ object DestructuringAssignmentsExtractor {
         } else {
           finalizeDeclarations(variableDeclaration)
         }
-      case child => visit(child)
+      case _ =>
     })
     finalizeDeclarations(node.getLastChild)
-  }
-
-  private val visit: PartialFunction[Node, Unit] = {
-    case functionNode: FunctionNode => visit(functionNode.getBody)
-    case block: Block => visitExtractable(block)
   }
 }
