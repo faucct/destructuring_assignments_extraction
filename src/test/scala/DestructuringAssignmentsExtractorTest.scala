@@ -1,4 +1,5 @@
 import org.mozilla.javascript.Parser
+import org.mozilla.javascript.ast.{ObjectLiteral, VariableDeclaration}
 
 class DestructuringAssignmentsExtractorTest extends org.scalatest.FunSuite {
   test("variable declarations") {
@@ -43,6 +44,28 @@ class DestructuringAssignmentsExtractorTest extends org.scalatest.FunSuite {
     )
     DestructuringAssignmentsExtractor(script)
     assertResult("function ping(arr) {\n  [a, b] = arr;\n}\n")(script.toSource(0))
+  }
+
+  test("object assignment") {
+    val script = parser().parse(
+      "function ping(arr) {\n  var name = obj.key;\n  var b = obj.b;\n}\n",
+      null,
+      0
+    )
+    DestructuringAssignmentsExtractor(script)
+    assertResult("function ping(arr) {\n  var {\n  b: b, \n  key: name} = obj;\n}\n")(script.toSource(0))
+  }
+
+  test("object assignment2") {
+    val script = parser().parse(
+      "function ping(arr) {\n  var name = obj[\"key\"];\n  var b = obj[\"b\"];\n}\n",
+      null,
+      0
+    )
+    DestructuringAssignmentsExtractor(script)
+    assertResult(
+      "function ping(arr) {\n  var {\n  \"b\": b, \n  \"key\": name} = obj;\n}\n"
+    )(script.toSource(0))
   }
 
   private def parser(): Parser = {

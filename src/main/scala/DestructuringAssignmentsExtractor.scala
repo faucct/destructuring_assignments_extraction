@@ -6,24 +6,7 @@ import scala.collection.mutable.ArrayBuffer
 import scala.util.Try
 
 object DestructuringAssignmentsExtractor {
-
-  private object IntElementGet {
-    def unapply(node: Node): Option[(AstNode, Int)] =
-      node match {
-        case elementGet: ElementGet =>
-          elementGet.getElement match {
-            case numberLiteral: NumberLiteral =>
-              tryToInt(numberLiteral.getValue) match {
-                case Some(index) => Some((elementGet.getTarget, index))
-                case None => None
-              }
-            case _ => None
-          }
-        case _ => None
-      }
-
-    private def tryToInt(s: String) = Try(s.toInt).toOption
-  }
+  private def tryToInt(s: String) = Try(s.toInt).toOption
 
   def apply(astRoot: AstRoot): Unit = {
     astRoot.visit(node => {
@@ -33,49 +16,92 @@ object DestructuringAssignmentsExtractor {
     })
   }
 
+  private def objectPropertyNode(left: AstNode, right: AstNode) = {
+    val property = new ObjectProperty()
+    property.setLeft(left)
+    property.setRight(right)
+    property
+  }
+
+  private def numberLiteralNode(value: String) = {
+    val numberLiteral = new NumberLiteral
+    numberLiteral.setValue(value)
+    numberLiteral
+  }
+
   private def nameNode(identifier: String) = {
     val name = new Name
     name.setIdentifier(identifier)
     name
   }
 
-  private def arrayDeclarationNodes(
+  private def stringLiteralNode(value: String, quoteChar: Char) = {
+    val stringLiteral = new StringLiteral
+    stringLiteral.setValue(value)
+    stringLiteral.setQuoteCharacter(quoteChar)
+    stringLiteral
+  }
+
+  private def assignmentNodes(
     statementConstructor: StatementConstructor,
     declarationsFromIndices: IndexedDeclarationTargets,
     initializer: AstNode
   ): ArrayBuffer[AstNode] = {
-    def arrayLiteralWithOtherDeclarations(
+    def leftLiteralWithOtherDeclarations(
       declarationsFromIndices: IndexedDeclarationTargets
-    ): (ArrayLiteral, ArrayBuffer[AstNode]) = {
-      val arrayLiteral = new ArrayLiteral
+    ): (AstNode, ArrayBuffer[AstNode]) = {
       val variableDeclarationNodes = new mutable.ArrayBuffer[AstNode]()
-      for (declarationsFromIndex <- declarationsFromIndices) {
-        if (declarationsFromIndex == null)
-          arrayLiteral.addElement(new EmptyExpression())
-        else {
-          if (declarationsFromIndex.names.isEmpty) {
-            val (element, otherDeclarations) = arrayLiteralWithOtherDeclarations(declarationsFromIndex.indexed)
+
+      def addTransitiveDeclarations(declarationsFromIndex: DeclarationTargets): Unit = {
+        for (alias <- declarationsFromIndex.names.tail) {
+          variableDeclarationNodes
+            .append(statementConstructor(nameNode(alias), nameNode(declarationsFromIndex.names(0))))
+        }
+        if (declarationsFromIndex.indexed.nonEmpty)
+          variableDeclarationNodes.appendAll(nodes(
+            declarationsFromIndex.indexed,
+            nameNode(declarationsFromIndex.names(0)),
+          ))
+      }
+
+      val indices = declarationsFromIndices.map { case (key: NumberKey, _) => tryToInt(key.value); case _ => None }
+      if (indices.forall(_.isDefined)) {
+        val entries =
+          indices.map(_.get).zip(declarationsFromIndices.values).toList.sortBy(_._1)
+        val arrayLiteral = new ArrayLiteral
+        for ((index, declarationTargets) <- entries) {
+          while (arrayLiteral.getSize < index)
+            arrayLiteral.addElement(new EmptyExpression())
+          if (declarationTargets.names.isEmpty) {
+            val (element, otherDeclarations) = leftLiteralWithOtherDeclarations(declarationTargets.indexed)
             arrayLiteral.addElement(element)
             variableDeclarationNodes ++= otherDeclarations
           } else {
-            arrayLiteral.addElement(nameNode(declarationsFromIndex.names(0)))
-            for (alias <- declarationsFromIndex.names.tail) {
-              variableDeclarationNodes
-                .append(statementConstructor(nameNode(alias), nameNode(declarationsFromIndex.names(0))))
-            }
-            if (declarationsFromIndex.indexed.nonEmpty)
-              variableDeclarationNodes.appendAll(nodes(
-                declarationsFromIndex.indexed,
-                nameNode(declarationsFromIndex.names(0)),
-              ))
+            arrayLiteral.addElement(nameNode(declarationTargets.names(0)))
+            addTransitiveDeclarations(declarationTargets)
           }
         }
+        (arrayLiteral, variableDeclarationNodes)
+      } else {
+        val objectLiteral = new ObjectLiteral
+        for ((key, declarationTargets) <- declarationsFromIndices) {
+          val declarationsFromIndex = declarationTargets
+          if (declarationsFromIndex.names.isEmpty) {
+            val (element, otherDeclarations) = leftLiteralWithOtherDeclarations(declarationsFromIndex.indexed)
+            objectLiteral.addElement(objectPropertyNode(key.objectKeyNode, element))
+            variableDeclarationNodes ++= otherDeclarations
+          } else {
+            objectLiteral
+              .addElement(objectPropertyNode(key.objectKeyNode, nameNode(declarationsFromIndex.names(0))))
+            addTransitiveDeclarations(declarationsFromIndex)
+          }
+        }
+        (objectLiteral, variableDeclarationNodes)
       }
-      (arrayLiteral, variableDeclarationNodes)
     }
 
     def nodes(indexedDeclarationTargets: IndexedDeclarationTargets, initializer: AstNode) = {
-      val (target, variableDeclarations) = arrayLiteralWithOtherDeclarations(declarationsFromIndices)
+      val (target, variableDeclarations) = leftLiteralWithOtherDeclarations(declarationsFromIndices)
       variableDeclarations.prepend(statementConstructor(target, initializer))
       variableDeclarations
     }
@@ -83,7 +109,23 @@ object DestructuringAssignmentsExtractor {
     nodes(declarationsFromIndices, initializer)
   }
 
-  type IndexedDeclarationTargets = mutable.ArrayBuffer[DeclarationTargets]
+  sealed trait Key {
+    def objectKeyNode: AstNode
+  }
+
+  case class NumberKey(value: String) extends Key {
+    def objectKeyNode: AstNode = numberLiteralNode(value)
+  }
+
+  case class StringKey(value: String, quoteChar: Char) extends Key {
+    override def objectKeyNode: AstNode = stringLiteralNode(value, quoteChar)
+  }
+
+  case class NameKey(name: String) extends Key {
+    override def objectKeyNode: AstNode = nameNode(name)
+  }
+
+  type IndexedDeclarationTargets = mutable.HashMap[Key, DeclarationTargets]
 
   sealed trait StatementConstructor {
     def apply(target: AstNode, initializer: AstNode): AstNode
@@ -118,18 +160,14 @@ object DestructuringAssignmentsExtractor {
   private def visitExtractable(blockNode: Node): Unit = {
     val varDeclarationsFromArrayVariables = new mutable.LinkedHashMap[Delayed, IndexedDeclarationTargets]
 
-    def indexDeclarationTargets(indexedDeclarationTargets: IndexedDeclarationTargets, index: Int) = {
-      while (indexedDeclarationTargets.size <= index)
-        indexedDeclarationTargets.append(null)
-      if (indexedDeclarationTargets(index) == null)
-        indexedDeclarationTargets(index) =
-          DeclarationTargets(mutable.ArrayBuffer(), mutable.ArrayBuffer())
-      indexedDeclarationTargets(index)
+    def indexDeclarationTargets(indexedDeclarationTargets: IndexedDeclarationTargets, key: Key) = {
+      indexedDeclarationTargets
+        .getOrElseUpdate(key, DeclarationTargets(mutable.ArrayBuffer(), new IndexedDeclarationTargets))
     }
 
     def buildVariableDeclarations() = {
       varDeclarationsFromArrayVariables.flatMap({ case (identifier, declarationsFromIndices) =>
-        arrayDeclarationNodes(identifier.statementType, declarationsFromIndices, nameNode(identifier.initializerName))
+        assignmentNodes(identifier.statementType, declarationsFromIndices, nameNode(identifier.initializerName))
       }).toList
     }
 
@@ -141,7 +179,7 @@ object DestructuringAssignmentsExtractor {
     def visitAssignment(node: Node, statementConstructor: StatementConstructor, left: AstNode, right: AstNode) {
       left match {
         case targetName: Name =>
-          def addToIndexed(indexedDeclarationTargets: IndexedDeclarationTargets, indices: List[Int]): Boolean = {
+          def addToIndexed(indexedDeclarationTargets: IndexedDeclarationTargets, indices: List[Key]): Boolean = {
             var indexed = indexedDeclarationTargets
             var declarationTargets: DeclarationTargets = null
             for (index <- indices) {
@@ -154,14 +192,22 @@ object DestructuringAssignmentsExtractor {
             true
           }
 
-          def visitInitializer(indices: List[Int], initializer: AstNode): Boolean = {
+          def visitInitializer(indices: List[Key], initializer: AstNode): Boolean = {
             initializer match {
-              case IntElementGet(target, index) => visitInitializer(index :: indices, target)
+              case propertyGet: PropertyGet =>
+                visitInitializer(NameKey(propertyGet.getProperty.getIdentifier) :: indices, propertyGet.getTarget)
+              case elementGet: ElementGet =>
+                visitInitializer((elementGet.getElement match {
+                  case numberLiteral: NumberLiteral => NumberKey(numberLiteral.getValue)
+                  case name: Name => NameKey(name.getIdentifier)
+                  case stringLiteral: StringLiteral =>
+                    StringKey(stringLiteral.getValue, stringLiteral.getQuoteCharacter)
+                }) :: indices, elementGet.getTarget)
               case name: Name =>
                 addToIndexed(
                   varDeclarationsFromArrayVariables.getOrElseUpdate(
                     Delayed(statementConstructor, name.getIdentifier),
-                    new mutable.ArrayBuffer(),
+                    new IndexedDeclarationTargets,
                   ),
                   indices,
                 )
@@ -169,7 +215,7 @@ object DestructuringAssignmentsExtractor {
                 finalizeDeclarations(node)
                 val indexedDeclarationTargets = new IndexedDeclarationTargets
                 if (addToIndexed(indexedDeclarationTargets, indices)) {
-                  arrayDeclarationNodes(statementConstructor, indexedDeclarationTargets, initializer)
+                  assignmentNodes(statementConstructor, indexedDeclarationTargets, initializer)
                     .foreach(blockNode.addChildBefore(_, node))
                   true
                 } else
