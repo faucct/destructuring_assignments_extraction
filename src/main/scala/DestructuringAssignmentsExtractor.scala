@@ -61,7 +61,7 @@ object DestructuringAssignmentsExtractor {
             arrayLiteral.addElement(nameNode(declarationsFromIndex.names(0)))
             for (alias <- declarationsFromIndex.names.tail) {
               variableDeclarationNodes
-                .append(variableDeclarationNode(nameNode(alias), nameNode(declarationsFromIndex.names(0))))
+                .append(statementConstructor(nameNode(alias), nameNode(declarationsFromIndex.names(0))))
             }
             if (declarationsFromIndex.indexed.nonEmpty)
               variableDeclarationNodes.appendAll(nodes(
@@ -72,16 +72,6 @@ object DestructuringAssignmentsExtractor {
         }
       }
       (arrayLiteral, variableDeclarationNodes)
-    }
-
-    def variableDeclarationNode(target: AstNode, initializer: AstNode) = {
-      val variableDeclaration = new VariableDeclaration()
-      val variableInitializer = new VariableInitializer()
-      variableInitializer.setInitializer(initializer)
-      variableInitializer.setTarget(target)
-      variableDeclaration.addVariable(variableInitializer)
-      variableDeclaration.setIsStatement(true)
-      variableDeclaration
     }
 
     def nodes(indexedDeclarationTargets: IndexedDeclarationTargets, initializer: AstNode) = {
