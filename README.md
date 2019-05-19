@@ -19,3 +19,7 @@ function ping(arr) {
   var [a, b] = arr;
 }
 ```
+
+## Running
+
+sbt run src/test/resources/ping.js
