@@ -53,7 +53,9 @@ class DestructuringAssignmentsExtractorTest extends org.scalatest.FunSuite {
       0
     )
     DestructuringAssignmentsExtractor(script)
-    assertResult("function ping(arr) {\n  var {\n  b: b, \n  key: name} = obj;\n}\n")(script.toSource(0))
+    assertResult(
+      "function ping(arr) {\n  var {\n  b: b, \n  key: name} = obj;\n}\n"
+    )(script.toSource(0))
   }
 
   test("object assignment2") {
